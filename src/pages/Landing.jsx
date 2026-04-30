@@ -9,7 +9,7 @@ const Landing = () => {
   const { isDarkMode, toggleTheme } = useContext(ThemeContext);
 
   const handleDemoRequest = () => {
-    navigate('/dashboard');
+    navigate('/login');
   };
 
   const features = [

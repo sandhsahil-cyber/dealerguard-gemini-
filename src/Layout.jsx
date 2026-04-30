@@ -1,12 +1,23 @@
-import { useContext } from 'react';
-import { Outlet, Link, useLocation } from 'react-router-dom';
+import { useContext, useState, useEffect } from 'react';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Upload, FileText, LogOut, ShieldAlert, Sun, Moon } from 'lucide-react';
 import { ThemeContext } from './App';
+import { supabase } from './lib/supabase';
 import './Layout.css';
 
 const Layout = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const { isDarkMode, toggleTheme } = useContext(ThemeContext);
+  const [userEmail, setUserEmail] = useState('Admin User');
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user?.email) {
+        setUserEmail(user.email);
+      }
+    });
+  }, []);
 
   const navItems = [
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -14,6 +25,17 @@ const Layout = () => {
     { path: '/results', label: 'Results', icon: ShieldAlert },
     { path: '/reports', label: 'Reports', icon: FileText },
   ];
+
+  const handleLogout = async () => {
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      navigate('/login');
+    } catch (error) {
+      console.error('Error logging out:', error.message);
+      navigate('/login');
+    }
+  };
 
   return (
     <div className="layout">
@@ -52,10 +74,10 @@ const Layout = () => {
         </nav>
 
         <div className="sidebar-footer">
-          <Link to="/" className="nav-link logout">
+          <button onClick={handleLogout} className="nav-link logout-btn" style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem 1rem' }}>
             <LogOut size={20} />
             <span>Logout</span>
-          </Link>
+          </button>
         </div>
       </aside>
       
@@ -66,8 +88,8 @@ const Layout = () => {
               {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
             </button>
             <div className="user-profile">
-              <div className="avatar">A</div>
-              <span>Admin User</span>
+              <div className="avatar">{userEmail[0].toUpperCase()}</div>
+              <span>{userEmail}</span>
             </div>
           </div>
         </header>
