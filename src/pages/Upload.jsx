@@ -66,71 +66,28 @@ const Upload = () => {
     return { id, date, amtTally, venTally };
   };
 
-  /* ── Generate fraud detection results ──────────────── */
-  const VENDORS = ['MRF Tyres Ltd', 'Bosch Auto Parts', 'Tata Autocomp', 'Mahindra Parts', 'Exide Industries', 'Motherson Sumi', 'Sundaram Clayton', 'Minda Industries'];
-  const FAKE_VENDORS = ['MRF Tyres Pvt Ltd', 'Bosch Auto Spares', 'Tata Auto Systems', 'Mahindra Spare Parts Co', 'Exide Ind Ltd', 'Motherson Sumi Sys Pvt'];
-
-  const generateResults = (rows, scannedCount) => {
-    const totalCount = Math.max(rows.length, scannedCount, 5);
-
-    return Array.from({ length: totalCount }, (_, idx) => {
-      const base = rows[idx] ? extractRowData(rows[idx], idx) : null;
-      const seed = (idx * 7 + 3) % 10;
-
-      const amtTally = base?.amtTally || Math.floor(50000 + ((idx * 73841) % 850000));
-      const venTally = base?.venTally || VENDORS[idx % VENDORS.length];
-      const id       = base?.id   || `INV-${new Date().getFullYear()}-${String(idx + 1).padStart(3, '0')}`;
-      const date     = base?.date || new Date(Date.now() - idx * 86400000).toLocaleDateString('en-IN');
-
-      let status, score, amtDoc, venDoc;
-
-      if (seed < 3) {
-        // FRAUD — amount tampered ± vendor
-        amtDoc  = Math.round(amtTally * (1.05 + seed * 0.04));
-        venDoc  = seed < 1 ? FAKE_VENDORS[idx % FAKE_VENDORS.length] : venTally;
-        status  = 'fraud';
-        score   = Math.floor(15 + seed * 10);
-      } else if (seed < 5) {
-        // PARTIAL — small difference
-        amtDoc  = Math.round(amtTally * (1.01 + seed * 0.005));
-        venDoc  = venTally;
-        status  = 'partial';
-        score   = Math.floor(50 + seed * 5);
-      } else {
-        // MATCH — identical
-        amtDoc  = amtTally;
-        venDoc  = venTally;
-        status  = 'match';
-        score   = Math.floor(90 + seed);
-      }
-
-      return { id, date, amtTally, amtDoc, venTally, venDoc, status, score, reviewed: false };
-    });
-  };
-
   /* ── Start processing ───────────────────────────────── */
   const startProcessing = () => {
     if (!selectedOutlet) { alert('Please select a dealership outlet first.'); return; }
     if (!tallyFile && scannedFiles.length === 0) { alert('Please upload at least one file.'); return; }
 
     setIsProcessing(true);
-    setProgress(0);
+    setProgress(5);
 
     const runAnalysis = async (csvRows = []) => {
       try {
-        let pct = 0;
-        const results = generateResults(csvRows, scannedFiles.length);
-        
-        // Progress simulation for UI
-        const timer = setInterval(() => {
-          pct += Math.random() * 10 + 2;
-          if (pct >= 85) clearInterval(timer);
-          setProgress(Math.min(pct, 85));
-        }, 300);
-
-        // 1. Upload scanned files to Supabase Storage
+        const results = [];
         const uploadedUrls = [];
-        for (const file of scannedFiles) {
+        
+        // 1. Process each scanned file with Gemini
+        for (let i = 0; i < scannedFiles.length; i++) {
+          const file = scannedFiles[i];
+          setProgress(5 + Math.floor((i / scannedFiles.length) * 70));
+          
+          // a) Analyze with Gemini
+          const analysis = await analyzeInvoice(file, csvRows);
+          
+          // b) Upload to Supabase Storage for reference
           const fileExt = file.name.split('.').pop();
           const fileName = `${Math.random()}.${fileExt}`;
           const filePath = `${fileName}`;
@@ -139,13 +96,17 @@ const Upload = () => {
             .from('document')
             .upload(filePath, file);
             
-          if (uploadError) {
-            console.error('Storage upload error:', uploadError);
-          } else {
-            const { data: { publicUrl } } = supabase.storage.from('document').getPublicUrl(filePath);
-            uploadedUrls.push(publicUrl);
+          let publicUrl = null;
+          if (!uploadError) {
+            const { data: { publicUrl: url } } = supabase.storage.from('document').getPublicUrl(filePath);
+            publicUrl = url;
           }
+          
+          results.push({ ...analysis, imageUrl: publicUrl });
+          uploadedUrls.push(publicUrl);
         }
+
+        setProgress(80);
 
         // 2. Create Upload record
         const { data: { user } } = await supabase.auth.getUser();
@@ -156,7 +117,7 @@ const Upload = () => {
             status: 'completed',
             total_docs: results.length,
             user_id: user?.id,
-            outlet: selectedOutlet // Keep outlet for context
+            outlet: selectedOutlet
           })
           .select()
           .single();
@@ -167,15 +128,15 @@ const Upload = () => {
         if (uploadRecord) {
           const resultsToSave = results.map((r, idx) => ({
             upload_id: uploadRecord.id,
-            invoice_no: r.id,
-            party_name: r.venTally,
-            tally_amount: r.amtTally,
-            doc_amount: r.amtDoc,
-            match_status: r.status,
-            risk_score: r.score,
-            fraud_type: r.status === 'fraud' ? 'Amount Mismatch' : 'None',
-            notes: r.status === 'fraud' ? 'Potential discrepancy detected' : '',
-            image_url: uploadedUrls[idx] || null
+            invoice_no: r.invoice_no,
+            party_name: r.party_name,
+            tally_amount: r.tally_amount,
+            doc_amount: r.doc_amount,
+            match_status: r.match_status,
+            risk_score: r.risk_score,
+            fraud_type: r.fraud_type,
+            notes: r.notes,
+            image_url: r.imageUrl || null
           }));
 
           const { error: resultsError } = await supabase
@@ -184,20 +145,13 @@ const Upload = () => {
 
           if (resultsError) throw resultsError;
           
-          // 4. Clear localStorage after saving to Supabase
+          localStorage.setItem('lastUploadId', uploadRecord.id);
           localStorage.removeItem('fraudResults');
         }
 
-        clearInterval(timer);
         setProgress(100);
         
-        // 4. Store the new upload_id in localStorage (for session persistence if needed)
-        localStorage.setItem('lastUploadId', uploadRecord.id);
-        // Clear old fraudResults from localStorage
-        localStorage.removeItem('fraudResults');
-
         setTimeout(() => {
-          // e) Redirect to /results?upload_id=[new_id]
           navigate(`/results?upload_id=${uploadRecord.id}`);
         }, 600);
       } catch (err) {
