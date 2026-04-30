@@ -1,46 +1,85 @@
 import { useState, useEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Download, AlertTriangle, CheckCircle, HelpCircle, X, FileImage, FileSpreadsheet, Upload, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import './Results.css';
 
 const Results = () => {
-  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { uploadId, data: passedData = [], outlet = '', uploadDate = new Date().toLocaleDateString('en-IN') } = location.state || {};
+  const uploadId = searchParams.get('upload_id') || localStorage.getItem('lastUploadId');
 
   const [filter, setFilter] = useState('all');
   const [selectedRow, setSelectedRow] = useState(null);
-  const [data, setData] = useState(passedData);
-  const [loading, setLoading] = useState(!passedData.length && !!uploadId);
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [outlet, setOutlet] = useState('');
+  const [uploadDate, setUploadDate] = useState('');
+  
   const hasData = data.length > 0;
 
   useEffect(() => {
-    if (uploadId && !passedData.length) {
-      fetchResults();
-    }
+    fetchResults();
   }, [uploadId]);
 
   const fetchResults = async () => {
     try {
       setLoading(true);
+      
+      let currentId = uploadId;
+      
+      // If no ID, get the latest upload
+      if (!currentId) {
+        const { data: latest } = await supabase
+          .from('uploads')
+          .select('id, outlet, created_at')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+        
+        if (latest) {
+          currentId = latest.id;
+          setOutlet(latest.outlet);
+          setUploadDate(new Date(latest.created_at).toLocaleDateString('en-IN'));
+        }
+      } else {
+        // Fetch outlet info for specific ID
+        const { data: uploadInfo } = await supabase
+          .from('uploads')
+          .select('outlet, created_at')
+          .eq('id', currentId)
+          .single();
+        
+        if (uploadInfo) {
+          setOutlet(uploadInfo.outlet);
+          setUploadDate(new Date(uploadInfo.created_at).toLocaleDateString('en-IN'));
+        }
+      }
+
+      if (!currentId) {
+        setData([]);
+        return;
+      }
+
+      // Fetch fraud results
       const { data: results, error } = await supabase
         .from('fraud_results')
         .select('*')
-        .eq('upload_id', uploadId);
+        .eq('upload_id', currentId)
+        .order('risk_score', { ascending: false });
 
       if (error) throw error;
       
       const formattedData = results.map(r => ({
         id: r.invoice_no,
-        dbId: r.id, // Keep the real DB ID for updates
-        date: r.date,
-        amtTally: r.amt_tally,
-        amtDoc: r.amt_doc,
-        venTally: r.ven_tally,
-        venDoc: r.ven_doc,
-        status: r.status,
-        score: r.score,
+        dbId: r.id,
+        date: r.date || uploadDate,
+        amtTally: r.tally_amount || r.amt_tally,
+        amtDoc: r.doc_amount || r.amt_doc,
+        venTally: r.party_name || r.ven_tally,
+        venDoc: r.party_name || r.ven_doc,
+        status: r.match_status || r.status,
+        score: r.risk_score || r.score,
         reviewed: r.reviewed,
         imageUrl: r.image_url
       }));

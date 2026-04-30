@@ -18,7 +18,7 @@ const Reports = () => {
         .from('uploads')
         .select(`
           *,
-          user:user_id (email)
+          fraud_count: fraud_results(count)
         `)
         .order('created_at', { ascending: false });
 
@@ -28,11 +28,11 @@ const Reports = () => {
         id: r.id.substring(0, 8).toUpperCase(),
         fullId: r.id,
         date: new Date(r.created_at).toLocaleDateString('en-IN'),
-        totalDocs: r.doc_count,
-        matches: r.doc_count - r.fraud_count,
-        fraud: r.fraud_count,
-        user: r.user?.email || 'System',
-        outlet: r.outlet
+        totalDocs: r.total_docs || 0,
+        matches: (r.total_docs || 0) - (r.fraud_count?.[0]?.count || 0),
+        fraud: r.fraud_count?.[0]?.count || 0,
+        user: 'Administrator',
+        outlet: r.outlet?.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Unknown Outlet'
       }));
 
       setPastReports(formatted);

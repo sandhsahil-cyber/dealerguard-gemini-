@@ -21,55 +21,60 @@ const Dashboard = () => {
     try {
       setLoading(true);
       
-      // 1. Get total outlets from uploads
-      const { data: outletsData } = await supabase
+      // 1. Get total uploads count
+      const { count: uploads, error: uploadsError } = await supabase
         .from('uploads')
-        .select('outlet');
+        .select('*', { count: 'exact', head: true });
       
-      const uniqueOutlets = new Set(outletsData?.map(u => u.outlet)).size;
+      if (uploadsError) throw uploadsError;
 
-      // 2. Get fraud results stats
-      const { data: fraudResults, error: fraudError } = await supabase
+      // 2. Get total documents count
+      const { count: totalDocs, error: docsError } = await supabase
         .from('fraud_results')
-        .select('*');
-      
-      if (fraudError) throw fraudError;
+        .select('*', { count: 'exact', head: true });
 
-      const totalDocs = fraudResults.length;
-      const totalFrauds = fraudResults.filter(r => r.status === 'fraud').length;
-      const amountAtRisk = fraudResults
-        .filter(r => r.status === 'fraud')
-        .reduce((sum, r) => sum + (r.amt_doc || 0), 0);
+      if (docsError) throw docsError;
+
+      // 3. Get high risk count (risk_score > 70)
+      const { count: highRisk, error: riskError } = await supabase
+        .from('fraud_results')
+        .select('*', { count: 'exact', head: true })
+        .gt('risk_score', 70);
+      
+      if (riskError) throw riskError;
+
+      // 4. Get amount at risk
+      const { data: riskResults } = await supabase
+        .from('fraud_results')
+        .select('doc_amount')
+        .gt('risk_score', 70);
+
+      const amountAtRisk = riskResults?.reduce((sum, r) => sum + (r.doc_amount || 0), 0) || 0;
 
       setStats({
-        outlets: uniqueOutlets,
-        docs: totalDocs,
-        frauds: totalFrauds,
+        outlets: uploads || 0,
+        docs: totalDocs || 0,
+        frauds: highRisk || 0,
         amountAtRisk: amountAtRisk
       });
 
-      // 3. Get recent alerts with outlet info
-      const { data: alerts, error: alertsError } = await supabase
+      // 5. Get recent alerts
+      const { data: alerts } = await supabase
         .from('fraud_results')
-        .select(`
-          *,
-          uploads (outlet)
-        `)
-        .eq('status', 'fraud')
+        .select(`*, uploads(outlet)`)
+        .gt('risk_score', 70)
         .order('id', { ascending: false })
         .limit(5);
 
-      if (alertsError) throw alertsError;
-
-      const formattedAlerts = alerts.map(a => ({
-        id: a.invoice_no,
-        outlet: a.uploads?.outlet?.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Unknown Outlet',
-        amount: a.amt_doc,
-        reason: a.amt_tally !== a.amt_doc ? 'Amount Mismatch' : 'Vendor Discrepancy',
-        date: a.date
-      }));
-
-      setRecentAlerts(formattedAlerts);
+      if (alerts) {
+        setRecentAlerts(alerts.map(a => ({
+          id: a.invoice_no,
+          outlet: a.uploads?.outlet?.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Unknown Outlet',
+          amount: a.doc_amount,
+          reason: a.fraud_type || 'Discrepancy',
+          date: a.date || new Date().toLocaleDateString('en-IN')
+        })));
+      }
 
     } catch (err) {
       console.error('Dashboard fetch error:', err.message);

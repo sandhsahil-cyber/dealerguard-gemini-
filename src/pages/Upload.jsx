@@ -152,11 +152,11 @@ const Upload = () => {
         const { data: uploadRecord, error: uploadDbError } = await supabase
           .from('uploads')
           .insert({
-            outlet: selectedOutlet,
-            tally_filename: tallyFile?.name || 'Manual Entry',
-            doc_count: results.length,
-            fraud_count: results.filter(r => r.status === 'fraud').length,
-            user_id: user?.id
+            tally_file_name: tallyFile?.name || 'Manual Entry',
+            status: 'completed',
+            total_docs: results.length,
+            user_id: user?.id,
+            outlet: selectedOutlet // Keep outlet for context
           })
           .select()
           .single();
@@ -164,37 +164,41 @@ const Upload = () => {
         if (uploadDbError) throw uploadDbError;
 
         // 3. Save individual results
-        const resultsToSave = results.map((res, idx) => ({
-          upload_id: uploadRecord.id,
-          invoice_no: res.id,
-          date: res.date,
-          amt_tally: res.amtTally,
-          amt_doc: res.amtDoc,
-          ven_tally: res.venTally,
-          ven_doc: res.venDoc,
-          status: res.status,
-          score: res.score,
-          image_url: uploadedUrls[idx] || null
-        }));
+        if (uploadRecord) {
+          const resultsToSave = results.map((r, idx) => ({
+            upload_id: uploadRecord.id,
+            invoice_no: r.id,
+            party_name: r.venTally,
+            tally_amount: r.amtTally,
+            doc_amount: r.amtDoc,
+            match_status: r.status,
+            risk_score: r.score,
+            fraud_type: r.status === 'fraud' ? 'Amount Mismatch' : 'None',
+            notes: r.status === 'fraud' ? 'Potential discrepancy detected' : '',
+            image_url: uploadedUrls[idx] || null
+          }));
 
-        const { error: resultsError } = await supabase
-          .from('fraud_results')
-          .insert(resultsToSave);
+          const { error: resultsError } = await supabase
+            .from('fraud_results')
+            .insert(resultsToSave);
 
-        if (resultsError) throw resultsError;
+          if (resultsError) throw resultsError;
+          
+          // 4. Clear localStorage after saving to Supabase
+          localStorage.removeItem('fraudResults');
+        }
 
         clearInterval(timer);
         setProgress(100);
         
+        // 4. Store the new upload_id in localStorage (for session persistence if needed)
+        localStorage.setItem('lastUploadId', uploadRecord.id);
+        // Clear old fraudResults from localStorage
+        localStorage.removeItem('fraudResults');
+
         setTimeout(() => {
-          navigate('/results', {
-            state: {
-              uploadId: uploadRecord.id,
-              data: results,
-              outlet: selectedOutlet,
-              uploadDate: new Date().toLocaleDateString('en-IN'),
-            },
-          });
+          // e) Redirect to /results?upload_id=[new_id]
+          navigate(`/results?upload_id=${uploadRecord.id}`);
         }, 600);
       } catch (err) {
         console.error('Analysis failed:', err.message);
