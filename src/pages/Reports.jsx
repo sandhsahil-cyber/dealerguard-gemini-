@@ -1,8 +1,47 @@
-import { FileText, Download, Filter } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { FileText, Download, Filter, Loader2 } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import './Reports.css';
 
 const Reports = () => {
-  const pastReports = [];
+  const [pastReports, setPastReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchReports();
+  }, []);
+
+  const fetchReports = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('uploads')
+        .select(`
+          *,
+          user:user_id (email)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      const formatted = data.map(r => ({
+        id: r.id.substring(0, 8).toUpperCase(),
+        fullId: r.id,
+        date: new Date(r.created_at).toLocaleDateString('en-IN'),
+        totalDocs: r.doc_count,
+        matches: r.doc_count - r.fraud_count,
+        fraud: r.fraud_count,
+        user: r.user?.email || 'System',
+        outlet: r.outlet
+      }));
+
+      setPastReports(formatted);
+    } catch (err) {
+      console.error('Error fetching reports:', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="reports-page">
@@ -31,7 +70,13 @@ const Reports = () => {
               </tr>
             </thead>
             <tbody>
-              {pastReports.length === 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan="7" style={{ textAlign: 'center', padding: '4rem' }}>
+                    <Loader2 className="animate-spin" size={32} color="var(--primary)" style={{ margin: '0 auto' }} />
+                  </td>
+                </tr>
+              ) : pastReports.length === 0 ? (
                 <tr>
                   <td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
                     No reports available.

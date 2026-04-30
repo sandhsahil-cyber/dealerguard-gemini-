@@ -1,7 +1,82 @@
-import { Building2, FileSearch, ShieldAlert, IndianRupee, AlertTriangle, ChevronRight } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Building2, FileSearch, ShieldAlert, IndianRupee, AlertTriangle, ChevronRight, Loader2 } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import './Dashboard.css';
 
 const Dashboard = () => {
+  const [stats, setStats] = useState({
+    outlets: 0,
+    docs: 0,
+    frauds: 0,
+    amountAtRisk: 0
+  });
+  const [recentAlerts, setRecentAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      
+      // 1. Get total outlets from uploads
+      const { data: outletsData } = await supabase
+        .from('uploads')
+        .select('outlet');
+      
+      const uniqueOutlets = new Set(outletsData?.map(u => u.outlet)).size;
+
+      // 2. Get fraud results stats
+      const { data: fraudResults, error: fraudError } = await supabase
+        .from('fraud_results')
+        .select('*');
+      
+      if (fraudError) throw fraudError;
+
+      const totalDocs = fraudResults.length;
+      const totalFrauds = fraudResults.filter(r => r.status === 'fraud').length;
+      const amountAtRisk = fraudResults
+        .filter(r => r.status === 'fraud')
+        .reduce((sum, r) => sum + (r.amt_doc || 0), 0);
+
+      setStats({
+        outlets: uniqueOutlets,
+        docs: totalDocs,
+        frauds: totalFrauds,
+        amountAtRisk: amountAtRisk
+      });
+
+      // 3. Get recent alerts with outlet info
+      const { data: alerts, error: alertsError } = await supabase
+        .from('fraud_results')
+        .select(`
+          *,
+          uploads (outlet)
+        `)
+        .eq('status', 'fraud')
+        .order('id', { ascending: false })
+        .limit(5);
+
+      if (alertsError) throw alertsError;
+
+      const formattedAlerts = alerts.map(a => ({
+        id: a.invoice_no,
+        outlet: a.uploads?.outlet?.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Unknown Outlet',
+        amount: a.amt_doc,
+        reason: a.amt_tally !== a.amt_doc ? 'Amount Mismatch' : 'Vendor Discrepancy',
+        date: a.date
+      }));
+
+      setRecentAlerts(formattedAlerts);
+
+    } catch (err) {
+      console.error('Dashboard fetch error:', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
   const formatCurrency = (value) => {
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
@@ -10,7 +85,13 @@ const Dashboard = () => {
     }).format(value);
   };
 
-  const recentAlerts = [];
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+        <Loader2 className="animate-spin" size={64} color="var(--primary)" />
+      </div>
+    );
+  }
 
   return (
     <div className="dashboard">
@@ -26,7 +107,7 @@ const Dashboard = () => {
           </div>
           <div className="stat-info">
             <p className="stat-label">Total Outlets Monitored</p>
-            <h3 className="stat-value">0</h3>
+            <h3 className="stat-value">{stats.outlets}</h3>
           </div>
         </div>
 
@@ -35,8 +116,8 @@ const Dashboard = () => {
             <FileSearch className="stat-icon" />
           </div>
           <div className="stat-info">
-            <p className="stat-label">Docs Processed (This Month)</p>
-            <h3 className="stat-value">0</h3>
+            <p className="stat-label">Docs Processed (Total)</p>
+            <h3 className="stat-value">{stats.docs}</h3>
           </div>
         </div>
 
@@ -45,8 +126,8 @@ const Dashboard = () => {
             <ShieldAlert className="stat-icon" />
           </div>
           <div className="stat-info">
-            <p className="stat-label">Fraud Detected (This Month)</p>
-            <h3 className="stat-value danger-text">0</h3>
+            <p className="stat-label">Fraud Detected (Total)</p>
+            <h3 className="stat-value danger-text">{stats.frauds}</h3>
           </div>
         </div>
 
@@ -56,7 +137,7 @@ const Dashboard = () => {
           </div>
           <div className="stat-info">
             <p className="stat-label">Amount at Risk (₹)</p>
-            <h3 className="stat-value warning-text">{formatCurrency(0)}</h3>
+            <h3 className="stat-value warning-text">{formatCurrency(stats.amountAtRisk)}</h3>
           </div>
         </div>
       </div>

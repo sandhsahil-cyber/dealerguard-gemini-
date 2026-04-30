@@ -1,21 +1,78 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Download, AlertTriangle, CheckCircle, HelpCircle, X, FileImage, FileSpreadsheet, Upload } from 'lucide-react';
+import { Download, AlertTriangle, CheckCircle, HelpCircle, X, FileImage, FileSpreadsheet, Upload, Loader2 } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import './Results.css';
 
 const Results = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { data: passedData = [], outlet = '', uploadDate = new Date().toLocaleDateString('en-IN') } = location.state || {};
+  const { uploadId, data: passedData = [], outlet = '', uploadDate = new Date().toLocaleDateString('en-IN') } = location.state || {};
 
   const [filter, setFilter] = useState('all');
   const [selectedRow, setSelectedRow] = useState(null);
   const [data, setData] = useState(passedData);
+  const [loading, setLoading] = useState(!passedData.length && !!uploadId);
   const hasData = data.length > 0;
 
-  const markAsReviewed = (e, id) => {
+  useEffect(() => {
+    if (uploadId && !passedData.length) {
+      fetchResults();
+    }
+  }, [uploadId]);
+
+  const fetchResults = async () => {
+    try {
+      setLoading(true);
+      const { data: results, error } = await supabase
+        .from('fraud_results')
+        .select('*')
+        .eq('upload_id', uploadId);
+
+      if (error) throw error;
+      
+      const formattedData = results.map(r => ({
+        id: r.invoice_no,
+        dbId: r.id, // Keep the real DB ID for updates
+        date: r.date,
+        amtTally: r.amt_tally,
+        amtDoc: r.amt_doc,
+        venTally: r.ven_tally,
+        venDoc: r.ven_doc,
+        status: r.status,
+        score: r.score,
+        reviewed: r.reviewed,
+        imageUrl: r.image_url
+      }));
+      
+      setData(formattedData);
+    } catch (err) {
+      console.error('Error fetching results:', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const markAsReviewed = async (e, id) => {
     e.stopPropagation();
-    setData(prev => prev.map(item => item.id === id ? { ...item, reviewed: true } : item));
+    const item = data.find(i => i.id === id);
+    const dbId = item.dbId || item.id; // Fallback if no dbId
+
+    try {
+      // Optimistic update
+      setData(prev => prev.map(item => item.id === id ? { ...item, reviewed: true } : item));
+
+      const { error } = await supabase
+        .from('fraud_results')
+        .update({ reviewed: true })
+        .match({ id: dbId });
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Error updating review status:', err.message);
+      // Revert on error
+      setData(prev => prev.map(item => item.id === id ? { ...item, reviewed: false } : item));
+    }
   };
 
   const formatCurrency = (value) => {
@@ -61,7 +118,11 @@ const Results = () => {
         </button>
       </div>
 
-      {!hasData ? (
+      {loading ? (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}>
+          <Loader2 className="animate-spin" size={48} color="var(--primary)" />
+        </div>
+      ) : !hasData ? (
         <div style={{ textAlign: 'center', padding: '4rem 2rem' }}>
           <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📂</div>
           <h2 style={{ marginBottom: '0.75rem' }}>No Analysis Data</h2>

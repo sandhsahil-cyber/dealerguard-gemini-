@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload as UploadIcon, FileSpreadsheet, FileImage, Camera, CheckCircle, MapPin } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import './Upload.css';
 
 const Upload = () => {
@@ -115,28 +116,91 @@ const Upload = () => {
     setIsProcessing(true);
     setProgress(0);
 
-    const runAnalysis = (csvRows = []) => {
-      let pct = 0;
-      const results = generateResults(csvRows, scannedFiles.length);
+    const runAnalysis = async (csvRows = []) => {
+      try {
+        let pct = 0;
+        const results = generateResults(csvRows, scannedFiles.length);
+        
+        // Progress simulation for UI
+        const timer = setInterval(() => {
+          pct += Math.random() * 10 + 2;
+          if (pct >= 85) clearInterval(timer);
+          setProgress(Math.min(pct, 85));
+        }, 300);
 
-      const timer = setInterval(() => {
-        pct += Math.random() * 18 + 5;
-        if (pct >= 100) {
-          clearInterval(timer);
-          setProgress(100);
-          setTimeout(() => {
-            navigate('/results', {
-              state: {
-                data: results,
-                outlet: selectedOutlet,
-                uploadDate: new Date().toLocaleDateString('en-IN'),
-              },
-            });
-          }, 600);
-        } else {
-          setProgress(Math.min(pct, 99));
+        // 1. Upload scanned files to Supabase Storage
+        const uploadedUrls = [];
+        for (const file of scannedFiles) {
+          const fileExt = file.name.split('.').pop();
+          const fileName = `${Math.random()}.${fileExt}`;
+          const filePath = `${fileName}`;
+          
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('document')
+            .upload(filePath, file);
+            
+          if (uploadError) {
+            console.error('Storage upload error:', uploadError);
+          } else {
+            const { data: { publicUrl } } = supabase.storage.from('document').getPublicUrl(filePath);
+            uploadedUrls.push(publicUrl);
+          }
         }
-      }, 350);
+
+        // 2. Create Upload record
+        const { data: { user } } = await supabase.auth.getUser();
+        const { data: uploadRecord, error: uploadDbError } = await supabase
+          .from('uploads')
+          .insert({
+            outlet: selectedOutlet,
+            tally_filename: tallyFile?.name || 'Manual Entry',
+            doc_count: results.length,
+            fraud_count: results.filter(r => r.status === 'fraud').length,
+            user_id: user?.id
+          })
+          .select()
+          .single();
+
+        if (uploadDbError) throw uploadDbError;
+
+        // 3. Save individual results
+        const resultsToSave = results.map((res, idx) => ({
+          upload_id: uploadRecord.id,
+          invoice_no: res.id,
+          date: res.date,
+          amt_tally: res.amtTally,
+          amt_doc: res.amtDoc,
+          ven_tally: res.venTally,
+          ven_doc: res.venDoc,
+          status: res.status,
+          score: res.score,
+          image_url: uploadedUrls[idx] || null
+        }));
+
+        const { error: resultsError } = await supabase
+          .from('fraud_results')
+          .insert(resultsToSave);
+
+        if (resultsError) throw resultsError;
+
+        clearInterval(timer);
+        setProgress(100);
+        
+        setTimeout(() => {
+          navigate('/results', {
+            state: {
+              uploadId: uploadRecord.id,
+              data: results,
+              outlet: selectedOutlet,
+              uploadDate: new Date().toLocaleDateString('en-IN'),
+            },
+          });
+        }, 600);
+      } catch (err) {
+        console.error('Analysis failed:', err.message);
+        alert('Analysis failed: ' + err.message);
+        setIsProcessing(false);
+      }
     };
 
     if (tallyFile) {
